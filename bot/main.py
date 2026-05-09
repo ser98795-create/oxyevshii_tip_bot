@@ -7,6 +7,7 @@ import logging
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.enums import ParseMode
 
 from .config import Config
@@ -14,6 +15,18 @@ from .handlers import setup as setup_handlers
 from .llm import LLM
 from .memory import Memory
 from .persona import Persona
+
+
+def _mask_proxy(url: str) -> str:
+    """Скрыть пароль в URL прокси при логировании."""
+    if "@" not in url:
+        return url
+    scheme_sep = url.find("://")
+    head = url[: scheme_sep + 3] if scheme_sep != -1 else ""
+    rest = url[scheme_sep + 3 :] if scheme_sep != -1 else url
+    creds, _, host = rest.partition("@")
+    user = creds.split(":", 1)[0]
+    return f"{head}{user}:***@{host}"
 
 
 def _configure_logging(level: str) -> None:
@@ -50,9 +63,18 @@ async def _amain() -> None:
             "Узнайте chat_id командой /chatid и пропишите его в .env."
         )
 
+    session: AiohttpSession | None = None
+    if config.telegram_proxy_url:
+        log.info(
+            "Telegram API через прокси: %s",
+            _mask_proxy(config.telegram_proxy_url),
+        )
+        session = AiohttpSession(proxy=config.telegram_proxy_url)
+
     bot = Bot(
         token=config.bot_token,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+        session=session,
     )
     dp = Dispatcher()
     memory = Memory(history_size=config.history_size)
