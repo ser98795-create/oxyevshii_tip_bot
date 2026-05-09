@@ -8,6 +8,7 @@ import logging
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
+from aiogram.client.telegram import TelegramAPIServer
 from aiogram.enums import ParseMode
 
 from .config import Config
@@ -63,13 +64,20 @@ async def _amain() -> None:
             "Узнайте chat_id командой /chatid и пропишите его в .env."
         )
 
-    session: AiohttpSession | None = None
+    session_kwargs: dict = {}
+    if config.telegram_api_url:
+        log.info(
+            "Telegram API через свой сервер: %s",
+            config.telegram_api_url,
+        )
+        session_kwargs["api"] = TelegramAPIServer.from_base(config.telegram_api_url)
     if config.telegram_proxy_url:
         log.info(
             "Telegram API через прокси: %s",
             _mask_proxy(config.telegram_proxy_url),
         )
-        session = AiohttpSession(proxy=config.telegram_proxy_url)
+        session_kwargs["proxy"] = config.telegram_proxy_url
+    session = AiohttpSession(**session_kwargs) if session_kwargs else None
 
     bot = Bot(
         token=config.bot_token,
