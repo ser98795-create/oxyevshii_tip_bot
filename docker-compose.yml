@@ -1,0 +1,18 @@
+services:
+  bot:
+    build: .
+    image: telegram-llm-bot:latest
+    container_name: telegram-llm-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      # Монтируем persona.txt с хоста, чтобы можно было править текст
+      # без пересборки образа: достаточно `docker compose restart bot`.
+      - ./persona.txt:/app/persona.txt:ro
+    # Логи в stdout/stderr — смотреть через `docker compose logs -f bot`.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
