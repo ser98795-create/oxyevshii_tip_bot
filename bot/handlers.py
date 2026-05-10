@@ -168,12 +168,18 @@ def setup(
         now = time.time()
         if not forced:
             elapsed = memory.seconds_since_last_bot_response(chat_id, now)
-            if elapsed < config.cooldown_seconds:
+            # Огромный cooldown (>= 1 года) трактуем как «вообще не вмешивайся
+            # в чат сама — отвечай только когда обратились». Так блокируем и
+            # первое сообщение после рестарта контейнера (когда last_response
+            # ещё пустой → elapsed == inf и обычная проверка пропускает).
+            no_auto = config.cooldown_seconds >= 31_536_000
+            if no_auto or elapsed < config.cooldown_seconds:
                 log.debug(
-                    "Cooldown в чате %s: %.1fs из %ds — пропуск",
+                    "Cooldown в чате %s: %.1fs из %ds (no_auto=%s) — пропуск",
                     chat_id,
                     elapsed,
                     config.cooldown_seconds,
+                    no_auto,
                 )
                 return
 
