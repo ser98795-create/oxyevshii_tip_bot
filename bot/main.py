@@ -12,6 +12,7 @@ from aiogram.client.telegram import TelegramAPIServer
 from aiogram.enums import ParseMode
 
 from .config import Config
+from .dossier import Dossier
 from .handlers import setup as setup_handlers
 from .llm import LLM
 from .memory import Memory
@@ -44,13 +45,14 @@ async def _amain() -> None:
     _configure_logging(config.log_level)
     log = logging.getLogger("bot")
     log.info(
-        "Старт бота: model=%s base_url=%s allowed_chats=%s admins=%s cooldown=%ds history=%d",
+        "Старт бота: model=%s base_url=%s allowed_chats=%s admins=%s cooldown=%ds history=%d dossier=%s",
         config.model,
         config.openai_base_url or "<openai-default>",
         config.allowed_chat_ids or "<все чаты — НЕ РЕКОМЕНДУЕТСЯ>",
         config.admin_user_ids or "<нет — управляющие команды НИКОМУ недоступны>",
         config.cooldown_seconds,
         config.history_size,
+        config.dossier_path,
     )
     if not config.admin_user_ids:
         log.warning(
@@ -87,6 +89,7 @@ async def _amain() -> None:
     dp = Dispatcher()
     memory = Memory(history_size=config.history_size)
     persona = Persona(path=config.persona_path)
+    dossier = Dossier(path=config.dossier_path)
     llm = LLM(
         api_key=config.openai_api_key,
         base_url=config.openai_base_url,
@@ -94,7 +97,7 @@ async def _amain() -> None:
         temperature=config.temperature,
         max_tokens=config.max_tokens,
     )
-    setup_handlers(dp, bot, config, memory, persona, llm)
+    setup_handlers(dp, bot, config, memory, persona, llm, dossier)
     log.info("Персона (превью): %s", persona.text()[:120].replace("\n", " "))
 
     me = await bot.me()

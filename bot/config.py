@@ -69,6 +69,7 @@ class Config:
     cooldown_seconds: int
     history_size: int
     persona_path: Path
+    dossier_path: Path
     temperature: float
     max_tokens: int
     log_level: str
@@ -87,6 +88,7 @@ class Config:
             cooldown_seconds=_env_int("COOLDOWN_SECONDS", 60),
             history_size=_env_int("HISTORY_SIZE", 20),
             persona_path=Path(_env_str("PERSONA_FILE", "persona.txt")),
+            dossier_path=Path(_env_str("DOSSIER_FILE", "data/dossier.json")),
             temperature=_env_float("TEMPERATURE", 0.8),
             max_tokens=_env_int("MAX_TOKENS", 600),
             log_level=_env_str("LOG_LEVEL", "INFO").upper(),
