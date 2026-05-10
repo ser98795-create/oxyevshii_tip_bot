@@ -79,15 +79,14 @@ class LLM:
     ) -> str | None:
         """Возвращает текст ответа или None, если бот решил промолчать.
 
-        forced=True означает, что бот ОБЯЗАН ответить (на упоминание или reply).
-        Тогда модель не выбирает — отвечать или нет, а сразу формулирует ответ.
+        forced=True означает, что бот ОБЯЗАН ответить (упоминание / reply / личка).
+        В этом случае модель просят сразу выдать обычный текст без JSON-обвязки —
+        иначе модель иногда возвращает {"speak": false} даже когда её прямо звали,
+        и пользователь видел тишину в ответ на свой вопрос.
+
+        forced=False — режим «решить, влезать ли». Тут JSON нужен, чтобы отличить
+        «промолчать» от «ответить вот так».
         """
-        instruction = _FORCED_INSTRUCTION if forced else _DECISION_INSTRUCTION
-        system_prompt = (
-            f"{persona_text.strip()}\n\n"
-            f"{instruction}\n\n"
-            f"{_OUTPUT_FORMAT}"
-        )
         history_str = format_history(history) or "(история пуста)"
         # Кому именно отвечаем — берём последнего «не-бота» из истории.
         # Подсовываем модели его имя в открытую, чтобы она не сваливалась
@@ -104,23 +103,46 @@ class LLM:
             if last_speaker
             else ""
         )
-        user_prompt = (
-            f"Последние сообщения чата:\n{history_str}\n\n"
-            f"{addressee_line}"
-            "Твой ответ (JSON):"
-        )
+
+        if forced:
+            system_prompt = (
+                f"{persona_text.strip()}\n\n"
+                f"{_FORCED_INSTRUCTION}"
+            )
+            user_prompt = (
+                f"Последние сообщения чата:\n{history_str}\n\n"
+                f"{addressee_line}"
+                "Ответь одним коротким сообщением (1–3 предложения) в роли "
+                "своей персоны. Просто текст, без префиксов и без JSON."
+            )
+            response_format = None
+        else:
+            system_prompt = (
+                f"{persona_text.strip()}\n\n"
+                f"{_DECISION_INSTRUCTION}\n\n"
+                f"{_OUTPUT_FORMAT}"
+            )
+            user_prompt = (
+                f"Последние сообщения чата:\n{history_str}\n\n"
+                f"{addressee_line}"
+                "Твой ответ (JSON):"
+            )
+            response_format = {"type": "json_object"}
+
+        kwargs: dict = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": self.temperature,
+            "max_tokens": self.max_tokens,
+        }
+        if response_format is not None:
+            kwargs["response_format"] = response_format
 
         try:
-            resp = await self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                response_format={"type": "json_object"},
-                temperature=self.temperature,
-                max_tokens=self.max_tokens,
-            )
+            resp = await self.client.chat.completions.create(**kwargs)
         except APIError as exc:
             log.warning("Ошибка OpenAI API: %s", exc)
             return None
@@ -132,15 +154,18 @@ class LLM:
         if not raw:
             return None
 
+        if forced:
+            # Прямой ответ — без JSON. Возвращаем как есть.
+            return raw
+
         try:
             data = json.loads(raw)
         except json.JSONDecodeError:
-            log.warning("LLM вернул не-JSON: %r", raw[:200])
-            # Если forced — попытаемся отдать как есть, чтобы не молчать в лицо собеседнику.
-            return raw if forced else None
+            log.warning("LLM вернул не-JSON в режиме решения: %r", raw[:200])
+            return None
 
         if not isinstance(data, dict):
-            return raw if forced else None
+            return None
         if not data.get("speak"):
             return None
         text = data.get("text")

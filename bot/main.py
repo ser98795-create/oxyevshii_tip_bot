@@ -6,8 +6,6 @@ import asyncio
 import logging
 
 from aiogram import Bot, Dispatcher
-from aiogram.client.default import DefaultBotProperties
-from aiogram.enums import ParseMode
 
 from .config import Config
 from .handlers import setup as setup_handlers
@@ -50,10 +48,11 @@ async def _amain() -> None:
             "Узнайте chat_id командой /chatid и пропишите его в .env."
         )
 
-    bot = Bot(
-        token=config.bot_token,
-        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
-    )
+    # parse_mode по умолчанию НЕ ставим: ответы LLM — свободный текст,
+    # и любой случайный «<», «>» или «&» от модели ронял отправку
+    # (Telegram отбивал «can't parse entities»). Команды, которым нужен
+    # HTML (/chatid, /whoami, /status), указывают parse_mode явно.
+    bot = Bot(token=config.bot_token)
     dp = Dispatcher()
     memory = Memory(history_size=config.history_size)
     persona = Persona(path=config.persona_path)
