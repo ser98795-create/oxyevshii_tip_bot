@@ -72,6 +72,8 @@ class Config:
     temperature: float
     max_tokens: int
     log_level: str
+    telegram_proxy_url: str | None
+    telegram_api_url: str | None
 
     @classmethod
     def from_env(cls) -> Config:
@@ -88,4 +90,6 @@ class Config:
             temperature=_env_float("TEMPERATURE", 0.8),
             max_tokens=_env_int("MAX_TOKENS", 600),
             log_level=_env_str("LOG_LEVEL", "INFO").upper(),
+            telegram_proxy_url=_env_str("TELEGRAM_PROXY_URL") or None,
+            telegram_api_url=_env_str("TELEGRAM_API_URL") or None,
         )
