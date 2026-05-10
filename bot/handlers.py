@@ -19,6 +19,13 @@ log = logging.getLogger(__name__)
 
 
 def _full_user_name(message: Message) -> str:
+    """Имя автора для истории чата.
+
+    Если у пользователя задан Telegram-username, дописываем его в скобках
+    («Антон (@wow_1_2_3)»). Это нужно, чтобы LLM мог сверить автора с таблицей
+    прозвищ в persona.txt по @тегу, а не по «художественному» display name
+    типа `--->---> - ^ - <---<---`, который ни с чем не сматчишь.
+    """
     user = message.from_user
     if user is None:
         return "Аноним"
@@ -27,8 +34,9 @@ def _full_user_name(message: Message) -> str:
         parts.append(user.first_name)
     if user.last_name:
         parts.append(user.last_name)
-    if not parts and user.username:
-        parts.append(user.username)
+    if user.username:
+        tag = f"@{user.username}"
+        parts.append(f"({tag})" if parts else tag)
     if not parts:
         parts.append(f"user{user.id}")
     return " ".join(parts)
