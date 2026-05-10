@@ -189,11 +189,14 @@ def setup(
             log.debug("Не удалось отправить chat_action: %s", exc)
 
         history = memory.messages(chat_id)
+        bot_replies = memory.last_bot_replies(chat_id, n=5)
         try:
             reply_text = await llm.reply(
                 persona_text=persona.text(),
                 history=history,
                 forced=forced,
+                current_message=text,
+                bot_replies=bot_replies,
             )
         except Exception as exc:  # noqa: BLE001 — не хотим уронить хендлер на любом сбое
             log.exception("Ошибка генерации ответа: %s", exc)
