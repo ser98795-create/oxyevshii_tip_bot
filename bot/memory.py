@@ -42,6 +42,18 @@ class Memory:
     def messages(self, chat_id: int) -> list[HistoryMessage]:
         return list(self.state(chat_id).messages)
 
+    def last_bot_replies(self, chat_id: int, n: int = 5) -> list[HistoryMessage]:
+        """Последние n ответов бота в этом чате (новейшие в конце).
+
+        Нужно, чтобы передавать в промпт отдельно от общей истории —
+        модель видит свой недавний стиль и не штампует одно и то же
+        начало/концовку подряд.
+        """
+        bot_msgs = [m for m in self.state(chat_id).messages if m.is_bot]
+        if n <= 0:
+            return []
+        return bot_msgs[-n:]
+
     def mark_bot_responded(self, chat_id: int, ts: float) -> None:
         self.state(chat_id).last_bot_response_ts = ts
 

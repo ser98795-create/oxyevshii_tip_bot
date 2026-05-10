@@ -83,9 +83,9 @@ class Config:
             allowed_chat_ids=_env_chat_ids("ALLOWED_CHAT_IDS"),
             admin_user_ids=_env_chat_ids("ADMIN_USER_IDS"),
             cooldown_seconds=_env_int("COOLDOWN_SECONDS", 60),
-            history_size=_env_int("HISTORY_SIZE", 20),
+            history_size=_env_int("HISTORY_SIZE", 30),
             persona_path=Path(_env_str("PERSONA_FILE", "persona.txt")),
-            temperature=_env_float("TEMPERATURE", 0.8),
-            max_tokens=_env_int("MAX_TOKENS", 600),
+            temperature=_env_float("TEMPERATURE", 0.85),
+            max_tokens=_env_int("MAX_TOKENS", 500),
             log_level=_env_str("LOG_LEVEL", "INFO").upper(),
         )
