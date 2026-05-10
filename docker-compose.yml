@@ -10,6 +10,9 @@ services:
       # Монтируем persona.txt с хоста, чтобы можно было править текст
       # без пересборки образа: достаточно `docker compose restart bot`.
       - ./persona.txt:/app/persona.txt:ro
+      # Каталог с долгоживущими данными бота: dossier.json и т.п.
+      # Должен быть r/w — бот сам перезаписывает файл досье.
+      - ./data:/app/data
     # Логи в stdout/stderr — смотреть через `docker compose logs -f bot`.
     logging:
       driver: json-file

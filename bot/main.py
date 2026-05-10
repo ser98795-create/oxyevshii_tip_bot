@@ -7,13 +7,28 @@ import logging
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
+from aiogram.client.session.aiohttp import AiohttpSession
+from aiogram.client.telegram import TelegramAPIServer
 from aiogram.enums import ParseMode
 
 from .config import Config
+from .dossier import Dossier
 from .handlers import setup as setup_handlers
 from .llm import LLM
 from .memory import Memory
 from .persona import Persona
+
+
+def _mask_proxy(url: str) -> str:
+    """Скрыть пароль в URL прокси при логировании."""
+    if "@" not in url:
+        return url
+    scheme_sep = url.find("://")
+    head = url[: scheme_sep + 3] if scheme_sep != -1 else ""
+    rest = url[scheme_sep + 3 :] if scheme_sep != -1 else url
+    creds, _, host = rest.partition("@")
+    user = creds.split(":", 1)[0]
+    return f"{head}{user}:***@{host}"
 
 
 def _configure_logging(level: str) -> None:
@@ -30,13 +45,14 @@ async def _amain() -> None:
     _configure_logging(config.log_level)
     log = logging.getLogger("bot")
     log.info(
-        "Старт бота: model=%s base_url=%s allowed_chats=%s admins=%s cooldown=%ds history=%d",
+        "Старт бота: model=%s base_url=%s allowed_chats=%s admins=%s cooldown=%ds history=%d dossier=%s",
         config.model,
         config.openai_base_url or "<openai-default>",
         config.allowed_chat_ids or "<все чаты — НЕ РЕКОМЕНДУЕТСЯ>",
         config.admin_user_ids or "<нет — управляющие команды НИКОМУ недоступны>",
         config.cooldown_seconds,
         config.history_size,
+        config.dossier_path,
     )
     if not config.admin_user_ids:
         log.warning(
@@ -50,13 +66,30 @@ async def _amain() -> None:
             "Узнайте chat_id командой /chatid и пропишите его в .env."
         )
 
+    session_kwargs: dict = {}
+    if config.telegram_api_url:
+        log.info(
+            "Telegram API через свой сервер: %s",
+            config.telegram_api_url,
+        )
+        session_kwargs["api"] = TelegramAPIServer.from_base(config.telegram_api_url)
+    if config.telegram_proxy_url:
+        log.info(
+            "Telegram API через прокси: %s",
+            _mask_proxy(config.telegram_proxy_url),
+        )
+        session_kwargs["proxy"] = config.telegram_proxy_url
+    session = AiohttpSession(**session_kwargs) if session_kwargs else None
+
     bot = Bot(
         token=config.bot_token,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+        session=session,
     )
     dp = Dispatcher()
     memory = Memory(history_size=config.history_size)
     persona = Persona(path=config.persona_path)
+    dossier = Dossier(path=config.dossier_path)
     llm = LLM(
         api_key=config.openai_api_key,
         base_url=config.openai_base_url,
@@ -64,7 +97,7 @@ async def _amain() -> None:
         temperature=config.temperature,
         max_tokens=config.max_tokens,
     )
-    setup_handlers(dp, bot, config, memory, persona, llm)
+    setup_handlers(dp, bot, config, memory, persona, llm, dossier)
     log.info("Персона (превью): %s", persona.text()[:120].replace("\n", " "))
 
     me = await bot.me()

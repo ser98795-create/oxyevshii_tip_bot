@@ -67,18 +67,25 @@ class LLM:
         persona_text: str,
         history: list[HistoryMessage],
         forced: bool,
+        dossier_block: str = "",
     ) -> str | None:
         """Возвращает текст ответа или None, если бот решил промолчать.
 
         forced=True означает, что бот ОБЯЗАН ответить (на упоминание или reply).
         Тогда модель не выбирает — отвечать или нет, а сразу формулирует ответ.
+
+        dossier_block — необязательный кусок системного промпта со сведениями
+        про чат и его участников (см. `Dossier.render_block`). Подставляется
+        между текстом персоны и инструкцией.
         """
         instruction = _FORCED_INSTRUCTION if forced else _DECISION_INSTRUCTION
-        system_prompt = (
-            f"{persona_text.strip()}\n\n"
-            f"{instruction}\n\n"
-            f"{_OUTPUT_FORMAT}"
-        )
+        sections = [persona_text.strip()]
+        dossier_block = (dossier_block or "").strip()
+        if dossier_block:
+            sections.append(dossier_block)
+        sections.append(instruction)
+        sections.append(_OUTPUT_FORMAT)
+        system_prompt = "\n\n".join(sections)
         history_str = format_history(history) or "(история пуста)"
         user_prompt = f"Последние сообщения чата:\n{history_str}\n\nТвой ответ (JSON):"
 

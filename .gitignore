@@ -21,3 +21,8 @@ Thumbs.db
 *.log
 *.bak
 *.swp
+
+# Долгоживущие данные бота (dossier.json и т.п.) — в репо не коммитим,
+# каталог сохраняем для bind-mount'а через .gitkeep.
+data/*
+!data/.gitkeep
