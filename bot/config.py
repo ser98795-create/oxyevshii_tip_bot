@@ -80,6 +80,9 @@ class Config:
     # (см. bot/reactions.py). 0 — никогда, 1 — на каждое. По умолчанию 0.2
     # = ~каждое пятое сообщение получает реакцию.
     reaction_probability: float
+    # Путь к JSON-файлу с «папкой досье» (см. bot/dossier.py). Сегментирован
+    # по chat_id, в data/ примонтированном как volume у docker-compose.
+    dossier_path: Path
 
     @classmethod
     def from_env(cls) -> Config:
@@ -98,4 +101,5 @@ class Config:
             log_level=_env_str("LOG_LEVEL", "INFO").upper(),
             telegram_api_url=_env_str("TELEGRAM_API_URL") or None,
             reaction_probability=_env_float("REACTION_PROBABILITY", 0.2),
+            dossier_path=Path(_env_str("DOSSIER_FILE", "data/dossiers.json")),
         )
