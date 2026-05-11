@@ -15,7 +15,13 @@ from .config import Config
 from .dossier import Dossier, is_sensitive
 from .llm import LLM
 from .memory import HistoryMessage, Memory
-from .persona import Persona, build_aliases_map, detect_subjects
+from .persona import (
+    Persona,
+    build_aliases_map,
+    build_author_nicks,
+    detect_subjects,
+    resolve_author_nick,
+)
 from .reactions import Reactions
 
 log = logging.getLogger(__name__)
@@ -232,6 +238,8 @@ def setup(
         # авто-перечитывается на каждый persona.text().
         persona_text_now = persona.text()
         aliases_map = build_aliases_map(persona_text_now)
+        author_nicks = build_author_nicks(persona_text_now)
+        author_nick = resolve_author_nick(user_name, author_nicks)
         scan_text_parts = [text]
         for h in history[-3:]:
             if h.user_name:
@@ -254,6 +262,8 @@ def setup(
                 current_message=text,
                 bot_replies=bot_replies,
                 dossier_block=dossier_block,
+                author_nick=author_nick,
+                aliases_map=aliases_map,
             )
         except Exception as exc:  # noqa: BLE001 — не хотим уронить хендлер на любом сбое
             log.exception("Ошибка генерации ответа: %s", exc)

@@ -177,6 +177,63 @@ def _strip_trailing_filler_question(text: str) -> str:
     return s[: last_sentence_end + 1].rstrip()
 
 
+_SUMMON_RE = re.compile(
+    r"\b(позови|зови|кликни|разбуди|пни|передай|скажи)\b",
+    re.IGNORECASE | re.UNICODE,
+)
+_OPENER_TOKEN_RE = re.compile(
+    r"^\s*(?P<at>@?)(?P<name>[A-Za-zА-Яа-яЁё][\w\-]{1,30})\s*[,:\-—]\s*",
+    re.UNICODE,
+)
+
+
+def _enforce_addressee(
+    text: str,
+    author_nick: str | None,
+    aliases_map: dict[str, str] | None,
+    current_message: str,
+) -> str:
+    """Подменяет неверного адресата в начале ответа.
+
+    Модель в forced-режиме регулярно открывает ответ именем СУБЪЕКТА досье
+    («Лёха, …»), когда автор сообщения — другой человек («Антоха»). Промпт-
+    инструкции это не дожимают, поэтому страхуем кодом.
+
+    Логика:
+      • Если автор не определён или нет карты псевдонимов — ничего не делаем.
+      • Если в текущем сообщении автор явно просит передать что-то третьему
+        лицу («позови / зови / кликни / разбуди / пни / передай / скажи») —
+        тоже не лезем: это легитимное обращение к Х.
+      • Достаём опенер (первое имя/тег до запятой/двоеточия/тире). Если он
+        в `aliases_map` известен и его канонический ключ НЕ совпадает с
+        каноническим ключом автора — заменяем опенер на `author_nick`.
+      • Вокативные сокращения («Антох», «Лёх», «Серёг») в карте не лежат,
+        поэтому через эту проверку проходят без изменений — это и значит
+        «модель уже обратилась правильно, не лезь».
+    """
+    if not text or not author_nick or not aliases_map:
+        return text
+    if _SUMMON_RE.search(current_message or ""):
+        return text
+    first_line, sep, rest = text.partition("\n")
+    m = _OPENER_TOKEN_RE.match(first_line)
+    if not m:
+        return text
+    opener = (m.group("at") or "") + m.group("name")
+    opener_key = opener.lower()
+    canonical_opener = aliases_map.get(opener_key)
+    if canonical_opener is None and opener_key.startswith("@"):
+        canonical_opener = aliases_map.get(opener_key.lstrip("@"))
+    if canonical_opener is None:
+        return text
+    author_canonical = aliases_map.get(author_nick.lower())
+    if canonical_opener == author_canonical:
+        return text
+    tail = first_line[m.end() :]
+    new_first_line = f"{author_nick}, {tail}" if tail else f"{author_nick},"
+    return new_first_line + (sep + rest if sep else "")
+
+
 def _strip_forbidden_openers(text: str) -> str:
     """Срезает у ответа модели запрещённые открывалки в начале.
 
@@ -377,6 +434,8 @@ class LLM:
         current_message: str = "",
         bot_replies: list[HistoryMessage] | None = None,
         dossier_block: str = "",
+        author_nick: str | None = None,
+        aliases_map: dict[str, str] | None = None,
     ) -> ReplyResult | None:
         """Возвращает `ReplyResult` или None, если бот решил промолчать.
 
@@ -428,6 +487,22 @@ class LLM:
                 if dossier_section
                 else ""
             )
+            # Якорь адресата — отдельная строка перед «Сообщением», чтобы
+            # модель не путала автора со субъектом досье («что в досье на Х»
+            # пишет автор, не Х). Если @tag автора не нашёлся в таблице
+            # прозвищ — поле опускаем и полагаемся на обычное «автор: ...».
+            addressee_anchor = (
+                f"АДРЕСАТ ОТВЕТА: {author_nick}.\n"
+                f"Первое имя/обращение в твоём ответе — «{author_nick}» (или "
+                f"его звательная сокращённая форма). НЕ открывай ответ другим "
+                f"именем, даже если в сообщении упомянут кто-то ещё (например, "
+                f"в запросе «что в досье на Х» или «запиши на Х: …» — там Х "
+                f"это субъект, а адресат всё равно {author_nick}). Исключение: "
+                f"явная просьба «позови / зови / кликни / передай / скажи Х» — "
+                f"тогда открой ответ именем Х.\n\n"
+                if author_nick
+                else ""
+            )
             user_prompt = (
                 f"Контекст чата (формат «Имя (@тег): текст»):\n{history_str}\n\n"
                 f"Последние ответы Юли (не повторяй их структуру и обороты):\n"
@@ -435,6 +510,7 @@ class LLM:
                 f"Известные участники (Telegram-тег → имя и прозвища):\n"
                 f"{known_users}\n\n"
                 f"{dossier_block_text}"
+                f"{addressee_anchor}"
                 f"Сообщение, на которое надо ответить (автор: {addressee}):\n"
                 f"{current_block}\n\n"
                 "Задача:\n"
@@ -533,6 +609,12 @@ class LLM:
             without_markers, ops = _extract_dossier_ops(raw)
             cleaned = _strip_forbidden_openers(_strip_wrappers(without_markers))
             cleaned = _strip_trailing_filler_question(cleaned)
+            cleaned = _enforce_addressee(
+                cleaned,
+                author_nick=author_nick,
+                aliases_map=aliases_map,
+                current_message=current_message,
+            )
             if not cleaned:
                 return None
             return ReplyResult(text=cleaned, dossier_ops=ops)
