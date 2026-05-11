@@ -62,6 +62,50 @@ def build_aliases_map(persona_text: str) -> dict[str, str]:
     return out
 
 
+def build_author_nicks(persona_text: str) -> dict[str, str]:
+    """Парсит строки '@tag → Имя, Прозвище1, ...' в @tag → разговорная форма.
+
+    Берём ВТОРУЮ позицию из списка (обычно «Антоха», «Лёха», «Серёга» — то,
+    как ребят реально зовут в чате), а если её нет — первую («Антон»).
+    Используется, чтобы вычислить, как Юля должна обратиться к АВТОРУ
+    текущего сообщения. Чисто `aliases_map` для этого не годится — он
+    хранит lowercased канонические ключи и теряет «Антоху» в пользу «Антона».
+    """
+    out: dict[str, str] = {}
+    for raw in persona_text.splitlines():
+        m = _ALIASES_LINE_RE.match(raw)
+        if not m:
+            continue
+        tag = m.group("tag").lower()
+        names_raw = m.group("names") or ""
+        names = [n.strip() for n in names_raw.split(",") if n.strip()]
+        if not names:
+            continue
+        nick = names[1] if len(names) >= 2 else names[0]
+        out[tag] = nick
+    return out
+
+
+_USERNAME_RE = re.compile(r"@\w+", re.UNICODE)
+
+
+def resolve_author_nick(user_name: str, author_nicks: dict[str, str]) -> str | None:
+    """Извлекает @username из строки «Имя (@tag)» и возвращает разговорную форму.
+
+    `user_name` приходит из `_full_user_name(message)` в формате
+    «Антон (@wow_1_2_3)» или «--->---> ... (@wow_1_2_3)». Берём @tag, ищем
+    в `author_nicks`. Если @tag нет в карте — возвращаем None, тогда вызывающая
+    сторона аккуратно деградирует к старому поведению (last_speaker без
+    жёсткого якоря).
+    """
+    if not user_name or not author_nicks:
+        return None
+    m = _USERNAME_RE.search(user_name)
+    if not m:
+        return None
+    return author_nicks.get(m.group(0).lower())
+
+
 def detect_subjects(
     text: str,
     aliases_map: dict[str, str],
