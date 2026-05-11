@@ -6,6 +6,7 @@ import json
 import logging
 import random
 import re
+from dataclasses import dataclass, field
 from typing import Iterable
 
 from openai import APIError, AsyncOpenAI
@@ -14,8 +15,76 @@ from .memory import HistoryMessage
 
 log = logging.getLogger(__name__)
 
+
+@dataclass
+class DossierOp:
+    """Действие с досье, которое Юля «прописала» в своём ответе.
+
+    Парсится из спец-маркера в самом тексте модели (см. `_DOSSIER_MARKER_RE`).
+    Применяется уже в handlers.py — этот модуль ничего не сохраняет.
+    """
+
+    op: str  # "write" | "delete" | "clear"
+    subject: str
+    fact: str = ""
+
+
+@dataclass
+class ReplyResult:
+    """Результат вызова `LLM.reply`.
+
+    `text` — то, что отправляем в чат (уже почищенное от маркеров).
+    `dossier_ops` — список действий с досье, которые Юля попросила
+    выполнить. Может быть пустым.
+    """
+
+    text: str
+    dossier_ops: list[DossierOp] = field(default_factory=list)
+
+
+# Маркер для досье в ответе модели. Кладётся отдельной строкой,
+# в любом месте текста. Примеры:
+#   [[ДОСЬЕ:write|Лёха|собирается в Испанию]]
+#   [[ДОСЬЕ:delete|Лёха|пиво]]
+#   [[ДОСЬЕ:clear|Лёха]]
+# Имя/факт могут быть с пробелами и кириллицей; не используем символ `|`
+# внутри полей. Если модель забудет — Python просто не распарсит, и
+# никакая запись не сделается.
+_DOSSIER_MARKER_RE = re.compile(
+    r"\[\[ДОСЬЕ\s*:\s*(?P<op>write|delete|clear)\s*\|"
+    r"\s*(?P<subject>[^|\]\n]+?)\s*"
+    r"(?:\|\s*(?P<fact>[^\]\n]+?)\s*)?\]\]",
+    re.IGNORECASE | re.UNICODE,
+)
+
+
+def _extract_dossier_ops(text: str) -> tuple[str, list[DossierOp]]:
+    """Снимает из текста маркеры досье и возвращает (text_clean, ops).
+
+    Если маркеров нет — возвращает исходный текст и пустой список.
+    """
+    if not text or "[[" not in text:
+        return text, []
+    ops: list[DossierOp] = []
+    for m in _DOSSIER_MARKER_RE.finditer(text):
+        op = (m.group("op") or "").lower()
+        subject = (m.group("subject") or "").strip()
+        fact = (m.group("fact") or "").strip()
+        if not subject:
+            continue
+        if op == "clear":
+            ops.append(DossierOp(op="clear", subject=subject, fact=""))
+        elif op in ("write", "delete") and fact:
+            ops.append(DossierOp(op=op, subject=subject, fact=fact))
+    cleaned = _DOSSIER_MARKER_RE.sub("", text)
+    # Подчистим возможные сдвоенные пустые строки от удалённых маркеров.
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+    return cleaned, ops
+
 # Случайное настроение на каждый forced-ответ. Цель — разнообразить
 # регистр Юли, чтобы она не штамповала один и тот же тон подряд.
+# Часть позиций намекает на «легенду» агента-под-прикрытием — см. блок
+# ЛЕГЕНДА в persona.txt.
 _MOODS = [
     "сонная, но язвительная",
     "токсично-полезная",
@@ -27,6 +96,11 @@ _MOODS = [
     "неожиданно рассудительная",
     "коротко и ядовито",
     "в режиме полезной стервы",
+    "сижу с папочкой досье на коленях и хмыкаю",
+    "конспирологический настрой, всё подозрительно",
+    "чёрный юмор, всех бы посадить и продолжить",
+    "холодная и спокойная, как куратор после кофе",
+    "разогретая, всех ставит на место",
 ]
 
 
@@ -171,6 +245,39 @@ _FORCED_RULES = (
 )
 
 
+_DOSSIER_RULES = (
+    "ДОСЬЕ ЧАТА (роль «вечно скучающего архивариуса»):\n"
+    "У Юли есть папочка с заметками на участников — мемная картотека, не "
+    "база ФСБ. Используешь её так:\n"
+    "1) Если в сообщении есть просьба ЗАПИСАТЬ / ДОБАВИТЬ В ДОСЬЕ / "
+    "ЗАНЕСИ В КАРТОЧКУ / ЗАФИКСИРУЙ — приклей В КОНЕЦ ответа маркер:\n"
+    "   `[[ДОСЬЕ:write|<кто>|<короткий факт одной строкой>]]`\n"
+    "   где <кто> — имя или прозвище из таблицы «Известные участники», "
+    "   <факт> — то, что попросили запомнить.\n"
+    "2) Если просьба УДАЛИТЬ / СОТРИ / ЗАБУДЬ КОНКРЕТНЫЙ ПУНКТ —\n"
+    "   `[[ДОСЬЕ:delete|<кто>|<кусок факта или ключевое слово>]]`\n"
+    "3) Если просьба ОЧИСТИ КАРТОЧКУ / ЗАБУДЬ ВСЁ ПРО Х —\n"
+    "   `[[ДОСЬЕ:clear|<кто>]]`\n"
+    "4) На просьбу «покажи карточку / прочитай досье / что в досье на Х» "
+    "маркер НЕ ставь. Просто отвечай по «Выписке из досье» выше, в Юлином "
+    "тоне (язвительно, коротко, мемно). Если выписка пустая — так и скажи: "
+    "«пока ничего нет, добавляйте сами».\n"
+    "5) Если в чате упомянули человека и в выписке есть про него уместный "
+    "факт — можешь его ввернуть в свой ответ (примерно 1 ответ из 5), но не "
+    "дословно. Не зачитывай папку без запроса.\n"
+    "6) НЕ записывай: телефоны, точные адреса, паспорта, банковские карты, "
+    "пароли/токены, медицинские диагнозы и анализы, интимное про детей, "
+    "ничего, чем человек может реально подставиться. На такие просьбы — "
+    "отказ в роли Юли: «не, это уже не папочка позора, а статья на "
+    "минималках. Такое не пишу.» Маркер НЕ ставь.\n"
+    "7) Один маркер — одна запись. Если просьба сразу о двух фактах — "
+    "поставь два маркера подряд.\n"
+    "Маркеры пишутся ОТДЕЛЬНЫМИ строками внизу ответа, без markdown, без "
+    "кавычек, и из них никогда не торчит ничего лишнего (только op|кто|"
+    "факт). Пользователь маркеры не увидит — их вырежет код."
+)
+
+
 _DECISION_INSTRUCTION = (
     "Ты находишься в групповом чате друзей и читаешь последние сообщения. "
     "Реши, стоит ли тебе ответить прямо сейчас. "
@@ -223,18 +330,21 @@ class LLM:
         forced: bool,
         current_message: str = "",
         bot_replies: list[HistoryMessage] | None = None,
-    ) -> str | None:
-        """Возвращает текст ответа или None, если бот решил промолчать.
+        dossier_block: str = "",
+    ) -> ReplyResult | None:
+        """Возвращает `ReplyResult` или None, если бот решил промолчать.
 
         forced=True — упоминание / reply / личка. Модель получает:
           • system: персона;
           • system: случайное настроение Юли + жёсткие правила (приоритет
             ответа по сути, запреты, варианты регистра, опасные темы);
           • user: контекст чата, последние ответы Юли, известные участники,
-            конкретное сообщение для ответа, задача.
+            ВЫПИСКА ИЗ ДОСЬЕ (если есть по упомянутым людям), конкретное
+            сообщение для ответа, задача.
           Просим обычный текст без JSON — иначе модель иногда возвращала
           {"speak": false} даже на прямое обращение, и пользователь видел
-          тишину.
+          тишину. Действия с досье Юля приписывает к ответу спец-маркером
+          `[[ДОСЬЕ:write|Лёха|...]]` (см. `_DOSSIER_MARKER_RE`).
 
         forced=False — режим «решить, влезать ли» (используется только при
         обычном кулдауне < бесконечности). JSON нужен, чтобы отличить
@@ -243,6 +353,7 @@ class LLM:
         history_str = format_history(history) or "(история пуста)"
         bot_replies_str = format_history(bot_replies or []) or "(пока не отвечала)"
         known_users = _extract_known_users(persona_text) or "(нет данных)"
+        dossier_section = dossier_block.strip()
 
         # Кому именно отвечаем — берём последнего «не-бота» из истории.
         # Подсовываем модели его имя в открытую, чтобы она не сваливалась
@@ -263,7 +374,13 @@ class LLM:
             system_persona = persona_text.strip()
             system_rules = (
                 f"Текущее настроение Юли: {mood}.\n\n"
-                f"{_FORCED_RULES}"
+                f"{_FORCED_RULES}\n\n"
+                f"{_DOSSIER_RULES}"
+            )
+            dossier_block_text = (
+                f"Выписка из досье по упомянутым людям:\n{dossier_section}\n\n"
+                if dossier_section
+                else ""
             )
             user_prompt = (
                 f"Контекст чата (формат «Имя (@тег): текст»):\n{history_str}\n\n"
@@ -271,6 +388,7 @@ class LLM:
                 f"{bot_replies_str}\n\n"
                 f"Известные участники (Telegram-тег → имя и прозвища):\n"
                 f"{known_users}\n\n"
+                f"{dossier_block_text}"
                 f"Сообщение, на которое надо ответить (автор: {addressee}):\n"
                 f"{current_block}\n\n"
                 "Задача:\n"
@@ -285,6 +403,12 @@ class LLM:
                 "к НЕМУ, не к тому, кто попросил.\n"
                 "4) Если данных не хватает — задай ОДИН конкретный уточняющий "
                 "вопрос (никаких «раскрой мысль»).\n"
+                "5) Если в сообщении есть просьба ЗАПИСАТЬ/ДОБАВИТЬ/ЗАФИКСИРОВАТЬ "
+                "/ ЗАНЕСТИ В ДОСЬЕ / СОТРИ / ЗАБУДЬ / ОЧИСТИ КАРТОЧКУ — "
+                "следуй правилам блока «Досье» и приклей в конец ответа "
+                "маркер `[[ДОСЬЕ:...]]` (см. примеры там же). На просьбу "
+                "«покажи карточку / что в досье / прочитай досье» маркер НЕ "
+                "ставь — отвечай по «Выписке из досье» выше.\n"
                 "Без JSON, без кавычек вокруг, без markdown — просто текст "
                 "ответа в роли Юли."
             )
@@ -302,6 +426,11 @@ class LLM:
                 if last_speaker
                 else ""
             )
+            dossier_block_text = (
+                f"Выписка из досье по упомянутым людям:\n{dossier_section}\n\n"
+                if dossier_section
+                else ""
+            )
             system_prompt = (
                 f"{persona_text.strip()}\n\n"
                 f"{_DECISION_INSTRUCTION}\n\n"
@@ -309,6 +438,7 @@ class LLM:
             )
             user_prompt = (
                 f"Последние сообщения чата:\n{history_str}\n\n"
+                f"{dossier_block_text}"
                 f"{addressee_line}"
                 "Твой ответ (JSON):"
             )
@@ -352,8 +482,13 @@ class LLM:
             # (markdown-фенсы, лишние кавычки) и режем запрещённые открывалки
             # типа «Бля,», «Эй, мужики,», «Имя, бля, …» — промпт сам по себе
             # этот шаблон у gpt-4o-mini не дожимает.
-            cleaned = _strip_forbidden_openers(_strip_wrappers(raw))
-            return cleaned or None
+            # Маркеры досье вытаскиваем ДО _strip_forbidden_openers, иначе
+            # «[[ДОСЬЕ:...]]» рискует попасть в открывалку как мусор.
+            without_markers, ops = _extract_dossier_ops(raw)
+            cleaned = _strip_forbidden_openers(_strip_wrappers(without_markers))
+            if not cleaned:
+                return None
+            return ReplyResult(text=cleaned, dossier_ops=ops)
 
         try:
             data = json.loads(raw)
@@ -368,8 +503,10 @@ class LLM:
         text = data.get("text")
         if not isinstance(text, str):
             return None
-        text = text.strip()
-        return text or None
+        without_markers, ops = _extract_dossier_ops(text.strip())
+        if not without_markers:
+            return None
+        return ReplyResult(text=without_markers, dossier_ops=ops)
 
 
 def _strip_wrappers(text: str) -> str:

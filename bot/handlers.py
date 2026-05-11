@@ -12,9 +12,10 @@ from aiogram.types import Message
 
 from .animations import AnimationPool
 from .config import Config
+from .dossier import Dossier, is_sensitive
 from .llm import LLM
 from .memory import HistoryMessage, Memory
-from .persona import Persona
+from .persona import Persona, build_aliases_map, detect_subjects
 from .reactions import Reactions
 
 log = logging.getLogger(__name__)
@@ -60,6 +61,7 @@ def setup(
     memory: Memory,
     persona: Persona,
     llm: LLM,
+    dossier: Dossier,
 ) -> None:
     # Реакции и пул гифок инициализируем здесь, чтобы не раздувать
     # сигнатуру setup() в main.py. Пул гифок пока пустой — sendAnimation
@@ -222,17 +224,98 @@ def setup(
 
         history = memory.messages(chat_id)
         bot_replies = memory.last_bot_replies(chat_id, n=5)
+
+        # Готовим выписку из досье: ищем упомянутых в этом сообщении и
+        # в последних 3 строках истории. Так в контекст попадают и те,
+        # о ком сейчас речь, и автор текущей реплики (его прозвища тоже
+        # есть в карте псевдонимов). Карту парсим из persona.txt — она
+        # авто-перечитывается на каждый persona.text().
+        persona_text_now = persona.text()
+        aliases_map = build_aliases_map(persona_text_now)
+        scan_text_parts = [text]
+        for h in history[-3:]:
+            if h.user_name:
+                scan_text_parts.append(h.user_name)
+            if h.text:
+                scan_text_parts.append(h.text)
+        scan_text = "\n".join(scan_text_parts)
+        subjects = detect_subjects(scan_text, aliases_map)
+        dossier_block = dossier.relevant_block(
+            chat_id=chat_id,
+            subjects=subjects,
+            aliases_map=aliases_map,
+        )
+
         try:
-            reply_text = await llm.reply(
-                persona_text=persona.text(),
+            result = await llm.reply(
+                persona_text=persona_text_now,
                 history=history,
                 forced=forced,
                 current_message=text,
                 bot_replies=bot_replies,
+                dossier_block=dossier_block,
             )
         except Exception as exc:  # noqa: BLE001 — не хотим уронить хендлер на любом сбое
             log.exception("Ошибка генерации ответа: %s", exc)
-            reply_text = None
+            result = None
+
+        if result is None:
+            return
+        reply_text = (result.text or "").strip()
+        dossier_ops = list(result.dossier_ops)
+
+        # Применяем действия с досье ДО отправки ответа, чтобы при ошибке
+        # отправки запись осталась (модель уже «решила» — это её слова).
+        author_name = user_name or "?"
+        refusals: list[str] = []
+        for op in dossier_ops:
+            try:
+                if op.op == "write":
+                    # Локальная перепроверка: если модель забыла про
+                    # запрет — всё равно отказываем и подкидываем в текст
+                    # Юлину отбивку. Это страховка, основная проверка
+                    # уже внутри dossier.add_note().
+                    kind = is_sensitive(op.fact)
+                    if kind is not None:
+                        refusals.append(
+                            f"(не пишу в досье {op.subject}: {kind} — не папочка позора, а статья)"
+                        )
+                        log.info(
+                            "Отказ записи (handler) chat=%s subject=%s kind=%s",
+                            chat_id,
+                            op.subject,
+                            kind,
+                        )
+                        continue
+                    ok, reason = dossier.add_note(
+                        chat_id=chat_id,
+                        subject=op.subject,
+                        fact=op.fact,
+                        created_by=author_name,
+                        aliases_map=aliases_map,
+                    )
+                    if not ok and reason.startswith("sensitive:"):
+                        refusals.append(
+                            f"(не пишу в досье {op.subject}: {reason.split(':', 1)[1]})"
+                        )
+                elif op.op == "delete":
+                    dossier.delete_note(
+                        chat_id=chat_id,
+                        subject=op.subject,
+                        fact_substring=op.fact,
+                        aliases_map=aliases_map,
+                    )
+                elif op.op == "clear":
+                    dossier.clear_participant(
+                        chat_id=chat_id,
+                        subject=op.subject,
+                        aliases_map=aliases_map,
+                    )
+            except Exception as exc:  # noqa: BLE001 — досье не должно ронять бота
+                log.warning("Ошибка применения операции досье %s: %s", op, exc)
+
+        if refusals and reply_text:
+            reply_text = reply_text + "\n" + " ".join(refusals)
 
         if not reply_text:
             return
@@ -253,4 +336,9 @@ def setup(
             ),
         )
         memory.mark_bot_responded(chat_id, time.time())
-        log.info("Ответил в чате %s (msg_id=%s)", chat_id, sent.message_id)
+        log.info(
+            "Ответил в чате %s (msg_id=%s, dossier_ops=%d)",
+            chat_id,
+            sent.message_id,
+            len(dossier_ops),
+        )

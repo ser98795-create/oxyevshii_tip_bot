@@ -10,6 +10,7 @@ from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.client.telegram import TelegramAPIServer
 
 from .config import Config
+from .dossier import Dossier
 from .handlers import setup as setup_handlers
 from .llm import LLM
 from .memory import Memory
@@ -67,6 +68,7 @@ async def _amain() -> None:
     dp = Dispatcher()
     memory = Memory(history_size=config.history_size)
     persona = Persona(path=config.persona_path)
+    dossier = Dossier(path=config.dossier_path)
     llm = LLM(
         api_key=config.openai_api_key,
         base_url=config.openai_base_url,
@@ -74,7 +76,7 @@ async def _amain() -> None:
         temperature=config.temperature,
         max_tokens=config.max_tokens,
     )
-    setup_handlers(dp, bot, config, memory, persona, llm)
+    setup_handlers(dp, bot, config, memory, persona, llm, dossier)
     log.info("Персона (превью): %s", persona.text()[:120].replace("\n", " "))
 
     me = await bot.me()
