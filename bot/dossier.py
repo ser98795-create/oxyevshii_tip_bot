@@ -440,9 +440,30 @@ class Dossier:
         Берёт ТОЛЬКО упомянутых участников, каждому — последние
         `max_per_subject` активных заметок. Возвращает пустую строку,
         если ни по кому из subjects ничего нет.
+
+        Каждая строка содержит ВСЕ известные прозвища участника инлайн —
+        иначе модель не связывает «спросили про Темщика» с «в досье запись
+        на Лёху», и говорит «по Темщику пусто», хотя выписка-то прилетела.
         """
         seen_keys: set[str] = set()
         lines: list[str] = []
+        # Обратная карта: canonical → список прозвищ (кроме @-тегов и
+        # самого канонического ключа). Сортируем по длине, чтобы более
+        # «полные» формы шли первыми — так читабельнее в промпте.
+        reverse: dict[str, list[str]] = {}
+        if aliases_map:
+            for alias, ckey in aliases_map.items():
+                if not alias or alias.startswith("@"):
+                    continue
+                if alias == ckey:
+                    continue
+                # `build_aliases_map` кладёт username как «@tag» И как «tag».
+                # Голую форму отфильтровываем — это не прозвище.
+                if f"@{alias}" in aliases_map:
+                    continue
+                reverse.setdefault(ckey, []).append(alias)
+            for ckey in reverse:
+                reverse[ckey] = sorted(set(reverse[ckey]), key=len, reverse=True)
         for s in subjects:
             ckey = _canonical(s, aliases_map)
             if not ckey or ckey in seen_keys:
@@ -452,5 +473,12 @@ class Dossier:
             if not notes:
                 continue
             facts = "; ".join(n.text for n in notes[-max_per_subject:])
-            lines.append(f"— {display}: {facts}.")
+            extra = reverse.get(ckey, [])
+            # Берём максимум 4 алиаса — этого хватает, чтобы модель связала
+            # «Темщик/Алёша/Алексей» с «Лёхой», но не раздувать промпт.
+            aliases_inline = ""
+            if extra:
+                titled = [a[:1].upper() + a[1:] for a in extra[:4]]
+                aliases_inline = f" (он же {', '.join(titled)})"
+            lines.append(f"— {display}{aliases_inline}: {facts}.")
         return "\n".join(lines)
