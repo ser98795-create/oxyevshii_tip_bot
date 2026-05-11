@@ -10,10 +10,12 @@ from aiogram.enums import ChatType
 from aiogram.filters import Command
 from aiogram.types import Message
 
+from .animations import AnimationPool
 from .config import Config
 from .llm import LLM
 from .memory import HistoryMessage, Memory
 from .persona import Persona
+from .reactions import Reactions
 
 log = logging.getLogger(__name__)
 
@@ -59,6 +61,12 @@ def setup(
     persona: Persona,
     llm: LLM,
 ) -> None:
+    # Реакции и пул гифок инициализируем здесь, чтобы не раздувать
+    # сигнатуру setup() в main.py. Пул гифок пока пустой — sendAnimation
+    # отключён, архитектура только зарезервирована (см. bot/animations.py).
+    reactions = Reactions(probability=config.reaction_probability)
+    animations = AnimationPool()
+
     @dp.message(Command("chatid"))
     async def cmd_chatid(message: Message) -> None:
         # Публичная команда (нужна для самой первой настройки —
@@ -163,6 +171,22 @@ def setup(
         if memory.is_muted(chat_id):
             log.debug("Чат %s заглушен админом — пропуск", chat_id)
             return
+
+        # Реакции и гифки на пользовательское сообщение — независимо от
+        # того, ответит ли бот текстом ниже. Реакцию и гифку НЕ комбинируем
+        # (правило из ТЗ): пока пул гифок пуст, ветка animations.enabled
+        # никогда не срабатывает, и мы всегда падаем в ветку реакции. Когда
+        # потом включим sendAnimation, здесь будет выбор «или гифка, или
+        # реакция, или ничего».
+        try:
+            if animations.enabled:
+                # TODO: pool.pick(...) + bot.send_animation(...).
+                # Сейчас сюда не попадаем — пул пуст.
+                pass
+            else:
+                await reactions.maybe_react(bot, message, bot_id)
+        except Exception as exc:  # noqa: BLE001 — украшение, бот ронять нельзя
+            log.debug("Реакция/гифка не обработана: %s", exc)
 
         is_private = message.chat.type == ChatType.PRIVATE
         is_mention = bool(bot_username) and (f"@{bot_username}" in text.lower())

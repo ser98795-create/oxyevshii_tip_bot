@@ -76,6 +76,10 @@ class Config:
     # api.telegram.org для VPS из РФ). Если пусто — aiogram идёт напрямую
     # в api.telegram.org.
     telegram_api_url: str | None
+    # Вероятность поставить реакцию-эмодзи на пользовательское сообщение
+    # (см. bot/reactions.py). 0 — никогда, 1 — на каждое. По умолчанию 0.2
+    # = ~каждое пятое сообщение получает реакцию.
+    reaction_probability: float
 
     @classmethod
     def from_env(cls) -> Config:
@@ -93,4 +97,5 @@ class Config:
             max_tokens=_env_int("MAX_TOKENS", 500),
             log_level=_env_str("LOG_LEVEL", "INFO").upper(),
             telegram_api_url=_env_str("TELEGRAM_API_URL") or None,
+            reaction_probability=_env_float("REACTION_PROBABILITY", 0.2),
         )
