@@ -72,6 +72,10 @@ class Config:
     temperature: float
     max_tokens: int
     log_level: str
+    # Свой шлюз к Bot API (например, Cloudflare Worker, который проксирует
+    # api.telegram.org для VPS из РФ). Если пусто — aiogram идёт напрямую
+    # в api.telegram.org.
+    telegram_api_url: str | None
 
     @classmethod
     def from_env(cls) -> Config:
@@ -88,4 +92,5 @@ class Config:
             temperature=_env_float("TEMPERATURE", 0.85),
             max_tokens=_env_int("MAX_TOKENS", 500),
             log_level=_env_str("LOG_LEVEL", "INFO").upper(),
+            telegram_api_url=_env_str("TELEGRAM_API_URL") or None,
         )

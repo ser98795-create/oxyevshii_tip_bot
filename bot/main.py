@@ -6,6 +6,8 @@ import asyncio
 import logging
 
 from aiogram import Bot, Dispatcher
+from aiogram.client.session.aiohttp import AiohttpSession
+from aiogram.client.telegram import TelegramAPIServer
 
 from .config import Config
 from .handlers import setup as setup_handlers
@@ -52,7 +54,16 @@ async def _amain() -> None:
     # и любой случайный «<», «>» или «&» от модели ронял отправку
     # (Telegram отбивал «can't parse entities»). Команды, которым нужен
     # HTML (/chatid, /whoami, /status), указывают parse_mode явно.
-    bot = Bot(token=config.bot_token)
+    #
+    # Если задан TELEGRAM_API_URL — оборачиваем сессию aiogram в свой
+    # шлюз (например, Cloudflare Worker, проксирующий api.telegram.org
+    # для VPS из РФ).
+    session: AiohttpSession | None = None
+    if config.telegram_api_url:
+        api_server = TelegramAPIServer.from_base(config.telegram_api_url.rstrip("/"))
+        session = AiohttpSession(api=api_server)
+        log.info("Telegram API через свой шлюз: %s", config.telegram_api_url)
+    bot = Bot(token=config.bot_token, session=session) if session else Bot(token=config.bot_token)
     dp = Dispatcher()
     memory = Memory(history_size=config.history_size)
     persona = Persona(path=config.persona_path)
